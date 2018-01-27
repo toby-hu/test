@@ -10,12 +10,10 @@ import (
 	"time"
 )
 
-const (
-	baseURL               = "http://localhost:9443/eyJlcnIiOiIiLCJwYWdlIjoxMDAwMCwiZHVyIjoxMCwidGx0IjoxNSwibSI6MX0/fhir"
-	patientEverythingPath = "patient/$everything"
+var (
+	url      = flag.String("url", "", "url to fetching the bulk data from")
+	outputPrefix = flag.String("output_prefix", "", "prefix prepended to the default file name.")
 )
-
-var outputPrefix = flag.String("output_prefix", "", "prefix prepended to the default file name.")
 
 func reqBulkData(url string) (string, error) {
 	req, err := http.NewRequest("GET", url, nil)
@@ -89,13 +87,9 @@ func extractFilename(path string) string {
 
 func main() {
 	flag.Parse()
-	if *outputPrefix == "" {
-		log.Fatalf("empty output prefix")
-	}
-	url := fmt.Sprintf("%v/%v", baseURL, patientEverythingPath)
-	cl, err := reqBulkData(url)
+	cl, err := reqBulkData(*url)
 	if err != nil {
-		log.Fatalf("failed to request bulk data from %v: %v", url, err)
+		log.Fatalf("failed to request bulk data from %v: %v", *url, err)
 	}
 	fmt.Printf("content location: %v\n", cl)
 	links, err := getBulkDataLinks(cl)
