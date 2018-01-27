@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cloud.google.com/go/bigquery"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -11,6 +12,7 @@ import (
 )
 
 var (
+	bqProjectID  = flag.String("bq_project_id", "", "BigQuery project ID")
 	url          = flag.String("url", "", "url to fetching the bulk data from")
 	outputPrefix = flag.String("output_prefix", "", "prefix prepended to the default file name.")
 )
@@ -58,23 +60,23 @@ func getBulkDataLinks(url string) ([]string, error) {
 	}
 }
 
-func download(url, filename string) error {
+func fetchBody(url) ([]byte, error) {
 	resp, err := http.Get(url)
 	if err != nil {
-		return err
+		return []byte{}, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("got status \"%v\", want 200", resp.Status)
+		return []byte{}, fmt.Errorf("got status \"%v\", want 200", resp.Status)
 	}
 	if app := resp.Header.Get("Content-Type"); app != "application/fhir+ndjson" {
-		return fmt.Errorf("expect content type application/fhir+ndjson, got %v", app)
+		return []byte{}, fmt.Errorf("expect content type application/fhir+ndjson, got %v", app)
 	}
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return []byte{}, err
 	}
-	return ioutil.WriteFile(filename, body, 0660)
+	return body, nil
 }
 
 func extractFilename(path string) string {
@@ -96,12 +98,27 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to get bulk data links from %v: %v", cl, err)
 	}
+	if *bqProjectID != nil {
+		ctx := context.Background()
+		_, err := bigquery.NewClient(ctx, *bqProjectID)
+		if err != nil {
+			log.Fatalf("Failed to create BigQuery client: %v", err)
+		}
+	}
 	for _, link := range links {
-		name := *outputPrefix + extractFilename(link)
-		fmt.Printf("Downloading %v to %v...", link, name)
-		if err := download(link, name); err != nil {
-			fmt.Printf("\n")
-			log.Fatalf("failed to download %v to %v: %v", link, name, err)
+		fmt.Printf("Fetching %v...", link)
+		body, err := fetchBody(link)
+		if err != nil {
+			log.Fatalf(" FAILED\n")
+		}
+		name := extractFilename(link)
+		if *outputPrefix != "" {
+			fmt.Printf(" Writing to %v...", name)
+			ioutil.WriteFile(*outputPrefix+name, body, 0660)
+			if err := download(link, name); err != nil {
+				fmt.Printf(" FAILED\n")
+				log.Fatalf("failed to download %v to %v: %v", link, name, err)
+			}
 		}
 		fmt.Printf(" Done\n")
 	}
