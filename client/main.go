@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	url      = flag.String("url", "", "url to fetching the bulk data from")
+	url          = flag.String("url", "", "url to fetching the bulk data from")
 	outputPrefix = flag.String("output_prefix", "", "prefix prepended to the default file name.")
 )
 
@@ -51,7 +51,7 @@ func getBulkDataLinks(url string) ([]string, error) {
 			}
 			return ret, nil
 		case 202:
-			time.Sleep(5*time.Second)
+			time.Sleep(5 * time.Second)
 		default:
 			return []string{}, fmt.Errorf("got status %v, want 200", resp.Status)
 		}
