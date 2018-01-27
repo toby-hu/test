@@ -5,6 +5,8 @@ This is a project during the [Bulk Data Export](http://wiki.hl7.org/index.php?ti
 To run this demo, first clone the project to your local drive
 ```
 git clone https://github.com/toby-hu/test
+cd test/client/
+mkdir tmp
 ```
 
 Next, start a bulk data export enabled server for this client to communicate with. An example server is the [bulk-data-server](https://github.com/smart-on-fhir/bulk-data-server) provided by the Connectathon organizers. Once the server is brought up, set the `BASE_URL` variable to the server's endpoint, e.g.
