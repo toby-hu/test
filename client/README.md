@@ -7,9 +7,15 @@ To run this demo, first clone the project to your local drive
 git clone https://github.com/toby-hu/test
 ```
 
-Then, run the client code using `go run` command, which requires a required `--url` flag and an optional `--output_prefix` flag. For example, for scenario 1 (full bulk data export, open endpoint):
+Next, start a bulk data export enabled server for this client to communicate with. An example server is the [bulk-data-server](https://github.com/smart-on-fhir/bulk-data-server) provided by the Connectathon organizers. Once the server is brought up, set the `BASE_URL` variable to the server's endpoint, e.g.
 ```
 BASE_URL='http://localhost:9443/eyJlcnIiOiIiLCJwYWdlIjoxMDAwMCwiZHVyIjoxMCwidGx0IjoxNSwibSI6MX0/fhir'
+```
+
+For running the client code, make sure that Go language installed on your computer by following [the instructions from the golang.org site](https://golang.org/doc/install).
+
+Then, run the client code using `go run` command, which requires a required `--url` flag and an optional `--output_prefix` flag. For example, for scenario 1 (full bulk data export, open endpoint):
+```
 go run main.go --output_prefix=tmp/ --url=${BASE_URL}/patient/\$everything
 ```
 
