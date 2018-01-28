@@ -1,8 +1,6 @@
 package main
 
 import (
-	"cloud.google.com/go/bigquery"
-	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -11,14 +9,20 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"cloud.google.com/go/bigquery"
+	"cloud.google.com/go/storage"
+	"golang.org/x/net/context"
 )
 
 var (
-	bqDatasetName = flag.String("bq_dataset_name", "", "BigQuery dataset name")
-	bqProjectID   = flag.String("bq_project_id", "", "BigQuery project ID")
-	linksInBody   = flag.Bool("links_in_body", true, "whether the download")
-	outputPrefix  = flag.String("output_prefix", "", "prefix prepended to the default file name.")
-	url           = flag.String("url", "", "url to fetching the bulk data from")
+	bqDatasetName  = flag.String("bq_dataset_name", "", "BigQuery dataset name")
+	gcProjectID    = flag.String("gc_project_id", "", "Google Cloud project ID")
+	gcsBucketName  = flag.String("gcs_bucket_name", "", "Google Cloud Storage bucket name")
+	linksInBody    = flag.Bool("links_in_body", true, "whether the download")
+	outputPrefix   = flag.String("output_prefix", "", "prefix prepended to the default file name.")
+	retrySleepSecs = flag.Int("retry_sleep_secs", 5, "seconds to sleep before retry querying for bulk data readiness")
+	url            = flag.String("url", "", "url to fetching the bulk data from")
 
 	resourceTypes = []string{
 		"Account",
@@ -146,7 +150,6 @@ func reqBulkData(url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Add("Accept", "application/fhir+ndjson")
 	req.Header.Add("Prefer", "respond-async")
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -219,8 +222,8 @@ func getBulkDataLinks(url string) ([]string, error) {
 				return getLinksFromHeader(resp), nil
 			}
 		case 202:
-			fmt.Println("Not ready. Sleeping 5 seconds...")
-			time.Sleep(5 * time.Second)
+			fmt.Printf("Not ready. Sleeping %d seconds...\n", *retrySleepSecs)
+			time.Sleep(time.Duration(5) * time.Second)
 		default:
 			return []string{}, fmt.Errorf("got status %v, want 200", resp.Status)
 		}
@@ -263,6 +266,21 @@ func extractResourceType(s string) string {
 	return ""
 }
 
+func writeToGCS(ctx context.Context, projectID, bucketName, objName string, data []byte) error {
+	// TODO: Have the option to append or overwrite.
+	client, err := storage.NewClient(ctx)
+	if err != nil {
+		return err
+	}
+	bkt := client.Bucket(bucketName)
+	obj := bkt.Object(objName)
+	w := obj.NewWriter(ctx)
+	if _, err := w.Write(data); err != nil {
+		return err
+	}
+	return w.Close()
+}
+
 func main() {
 	flag.Parse()
 	cl, err := reqBulkData(*url)
@@ -274,17 +292,19 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to get bulk data links from %v: %v", cl, err)
 	}
-	var dataset *bigquery.Dataset = nil
 	ctx := context.Background()
-	if *bqProjectID != "" {
-		client, err := bigquery.NewClient(ctx, *bqProjectID)
+	var dataset *bigquery.Dataset = nil
+	if *gcProjectID != "" {
+		client, err := bigquery.NewClient(ctx, *gcProjectID)
 		if err != nil {
 			log.Println("For authentication issues, remember to set the GOOGLE_APPLICATION_CREDENTIALS environment variable.")
 			log.Fatalf("Failed to create BigQuery client: %v", err)
 		}
-		dataset = client.Dataset(*bqDatasetName)
-		if dataset == nil {
-			log.Fatalf("dataset not found: %v", *bqDatasetName)
+		if *bqDatasetName != "" {
+			dataset = client.Dataset(*bqDatasetName)
+			if dataset == nil {
+				log.Fatalf("dataset not found: %v", *bqDatasetName)
+			}
 		}
 	}
 	for _, link := range links {
@@ -295,29 +315,45 @@ func main() {
 		}
 		// Save to file if output_prefix is specified.
 		name := extractFilename(link)
+		resourceType := extractResourceType(name)
 		if *outputPrefix != "" {
-			fmt.Printf(" Writing to %v...", name)
+			fmt.Printf(" Writing to file %v...", name)
 			if err := ioutil.WriteFile(*outputPrefix+name, body, 0660); err != nil {
 				fmt.Printf(" FAILED\n")
 				log.Fatalf("failed to download %v to %v: %v", link, name, err)
 			}
 		}
-		// Load to BigQuery if a dataset exists.
-		if dataset != nil {
-			tableName := extractResourceType(name)
-			if tableName == "" {
+		if *gcsBucketName != "" {
+			fmt.Printf(" Writing to GCS bucket %v...", *gcsBucketName)
+			if *gcProjectID == "" {
 				fmt.Printf(" FAILED\n")
-				log.Fatalf("found no valid resource name in %v", name)
+				log.Fatalf("no gc_project_id provided for bucket %v", *gcsBucketName)
 			}
-			fmt.Printf(" Loading to BigQuery table %v...", tableName)
-			table := dataset.Table(tableName)
-			if err := table.Create(ctx, nil); err != nil {
-				fmt.Printf(" Table may already exist...")
-			}
-			_, err := table.Metadata(ctx)
-			if err != nil {
+			if resourceType == "" {
 				fmt.Printf(" FAILED\n")
-				log.Fatalf("failed to get metadata for %v: %v", tableName, err)
+				log.Fatalf("found no valid bucket name in %v", resourceType)
+			}
+			if err := writeToGCS(ctx, *gcProjectID, *gcsBucketName, resourceType, body); err != nil {
+				fmt.Printf(" Failed\n")
+				log.Fatalf("failed to write to GCS project %v, bucket %v, resource %v: %v", *gcProjectID, *gcsBucketName, resourceType, err)
+			}
+			// Load to BigQuery if a dataset exists.
+			if dataset != nil {
+				fmt.Printf(" Loading to BigQuery table %v...", resourceType)
+				gcsRef := bigquery.NewGCSReference(fmt.Sprintf("gs://%v/%v", *gcsBucketName, resourceType))
+				gcsRef.FileConfig.SourceFormat = bigquery.JSON
+				gcsRef.DestinationFormat = bigquery.JSON
+				gcsRef.FileConfig.AutoDetect = true
+				loader := dataset.Table(resourceType).LoaderFrom(gcsRef)
+				job, err := loader.Run(ctx)
+				if err != nil {
+					fmt.Printf(" FAILED\n")
+					log.Fatalf("failed to load %v to BigQuery: %v", resourceType, err)
+				}
+				status, err := job.Wait(ctx)
+				if err != nil || status.Err() != nil {
+					log.Fatalf("got status %v while waiting for loading job: %v", status, err)
+				}
 			}
 		}
 		fmt.Printf(" Done\n")
