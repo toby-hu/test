@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -11,6 +12,7 @@ import (
 )
 
 var (
+	linksInBody  = flag.Bool("links_in_body", true, "whether the download")
 	url          = flag.String("url", "", "url to fetching the bulk data from")
 	outputPrefix = flag.String("output_prefix", "", "prefix prepended to the default file name.")
 )
@@ -34,6 +36,39 @@ func reqBulkData(url string) (string, error) {
 	return resp.Header.Get("Content-Location"), nil
 }
 
+func getLinksFromHeader(resp *http.Response) []string {
+	ret := []string{}
+	links := strings.Split(resp.Header.Get("Link"), ",")
+	for _, link := range links {
+		ret = append(ret, strings.Trim(link, "<>"))
+	}
+	return ret
+}
+
+func getLinksFromBody(resp *http.Response) ([]string, error) {
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return []string{}, err
+	}
+	var jb map[string]interface{}
+	if err := json.Unmarshal(body, jb); err != nil {
+		return []string{}, fmt.Errorf("unmarshal body: %v", err)
+	}
+	output, ok := jb["output"]
+	if !ok {
+		return []string{}, fmt.Errorf("field \"output\" not found in response body")
+	}
+	array, ok := output.([]map[string]interface{})
+	if !ok {
+		return []string{}, fmt.Errorf("unmarshal output array: %v", err)
+	}
+	ret := []string{}
+	for _, config := range array {
+		ret = append(ret, fmt.Sprintf("%v_%v", config["type"].(string), extractFilename(config["url"].(string))))
+	}
+	return ret, nil
+}
+
 func getBulkDataLinks(url string) ([]string, error) {
 	// TODO: add timeout.
 	for {
@@ -44,13 +79,18 @@ func getBulkDataLinks(url string) ([]string, error) {
 		defer resp.Body.Close()
 		switch resp.StatusCode {
 		case 200:
-			ret := []string{}
-			links := strings.Split(resp.Header.Get("Link"), ",")
-			for _, link := range links {
-				ret = append(ret, strings.Trim(link, "<>"))
-			}
-			return ret, nil
+			if *linksInBody {
+				links, err := getLinksFromBody(resp)
+				if err != nil {
+					return links, err
+				} else {
+					return links, nil
+				}
+			} else {
+				return getLinksFromHeader(resp), nil
+			} 
 		case 202:
+			fmt.Println("Not ready. Sleeping 5 seconds...")
 			time.Sleep(5 * time.Second)
 		default:
 			return []string{}, fmt.Errorf("got status %v, want 200", resp.Status)
@@ -67,7 +107,7 @@ func download(url, filename string) error {
 	if resp.StatusCode != 200 {
 		return fmt.Errorf("got status \"%v\", want 200", resp.Status)
 	}
-	if app := resp.Header.Get("Content-Type"); app != "application/fhir+ndjson" {
+	if app := resp.Header.Get("Content-Type"); !strings.Contains(app, "application/fhir+ndjson") {
 		return fmt.Errorf("expect content type application/fhir+ndjson, got %v", app)
 	}
 	body, err := ioutil.ReadAll(resp.Body)
