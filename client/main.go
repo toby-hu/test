@@ -2,6 +2,7 @@ package main
 
 import (
 	"cloud.google.com/go/bigquery"
+	"context"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -60,7 +61,7 @@ func getBulkDataLinks(url string) ([]string, error) {
 	}
 }
 
-func fetchBody(url) ([]byte, error) {
+func fetchBody(url string) ([]byte, error) {
 	resp, err := http.Get(url)
 	if err != nil {
 		return []byte{}, err
@@ -98,7 +99,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to get bulk data links from %v: %v", cl, err)
 	}
-	if *bqProjectID != nil {
+	if *bqProjectID != "" {
 		ctx := context.Background()
 		_, err := bigquery.NewClient(ctx, *bqProjectID)
 		if err != nil {
