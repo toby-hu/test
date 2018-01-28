@@ -45,28 +45,33 @@ func getLinksFromHeader(resp *http.Response) []string {
 	return ret
 }
 
-func getLinksFromBody(resp *http.Response) ([]string, error) {
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return []string{}, err
-	}
+func unmarshalForLinks(body json.RawMessage) ([]string, error) {
 	var jb map[string]interface{}
-	if err := json.Unmarshal(body, jb); err != nil {
+	if err := json.Unmarshal(body, &jb); err != nil {
 		return []string{}, fmt.Errorf("unmarshal body: %v", err)
 	}
 	output, ok := jb["output"]
 	if !ok {
 		return []string{}, fmt.Errorf("field \"output\" not found in response body")
 	}
-	array, ok := output.([]map[string]interface{})
+	array, ok := output.([]interface{})
 	if !ok {
-		return []string{}, fmt.Errorf("unmarshal output array: %v", err)
+		return []string{}, fmt.Errorf("unmarshal output array")
 	}
 	ret := []string{}
-	for _, config := range array {
-		ret = append(ret, fmt.Sprintf("%v_%v", config["type"].(string), extractFilename(config["url"].(string))))
+	for _, element := range array {
+		config := element.(map[string]interface{})
+		ret = append(ret, config["url"].(string))
 	}
 	return ret, nil
+}
+
+func getLinksFromBody(resp *http.Response) ([]string, error) {
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return []string{}, err
+	}
+	return unmarshalForLinks(body)
 }
 
 func getBulkDataLinks(url string) ([]string, error) {
